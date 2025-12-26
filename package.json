@@ -1,0 +1,26 @@
+{
+  "name": "iub-cgpa-calculator",
+  "version": "1.0.0",
+  "description": "IUB Transcript Analyzer & CGPA Calculator with AI Strategy",
+  "main": "index.html",
+  "scripts": {
+    "dev": "vercel dev",
+    "build": "echo 'Static site - no build needed'",
+    "start": "echo 'Static site ready for deployment'"
+  },
+  "keywords": [
+    "iub",
+    "cgpa",
+    "calculator",
+    "transcript",
+    "analyzer"
+  ],
+  "author": "saifulraislam",
+  "license": "MIT",
+  "dependencies": {
+    "@vercel/speed-insights": "^1.3.1"
+  },
+  "engines": {
+    "node": "18.x"
+  }
+}
