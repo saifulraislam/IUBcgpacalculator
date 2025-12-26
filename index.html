@@ -1,0 +1,647 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>IUB Transcript Analyzer & Planner</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+    <script>pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';</script>
+    <style>
+        :root { --primary: #1a5f7a; --bg: #f4f7f6; --danger: #e74c3c; --success: #2ecc71; --warning: #f39c12; }
+        body { font-family: 'Segoe UI', sans-serif; background: var(--bg); margin: 0; padding: 20px; color: #333; }
+        .container { max-width: 1000px; margin: 0 auto; }
+        
+        /* Header */
+        .header-card { background: white; padding: 25px; border-radius: 12px; box-shadow: 0 4px 15px rgba(0,0,0,0.05); text-align: center; margin-bottom: 20px; }
+        .cgpa-box { font-size: 3.5rem; font-weight: bold; color: var(--primary); margin: 10px 0; }
+        .stats-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; margin-top: 15px; }
+        .stat-item { background: #eef2f5; padding: 10px; border-radius: 8px; }
+        
+        /* Upload */
+        .upload-area { border: 2px dashed #bdc3c7; padding: 30px; text-align: center; background: white; border-radius: 12px; cursor: pointer; transition: 0.3s; margin-bottom: 20px; }
+        .upload-area:hover { border-color: var(--primary); background: #eef6f9; }
+        .upload-progress { margin-top: 10px; color: var(--primary); }
+
+        /* Semesters */
+        .semester-block { background: white; border-radius: 12px; padding: 20px; margin-bottom: 20px; box-shadow: 0 2px 8px rgba(0,0,0,0.03); border-left: 5px solid var(--primary); }
+        .semester-header { display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid #eee; padding-bottom: 10px; margin-bottom: 10px; font-weight: bold; color: #444; }
+        
+        /* Courses */
+        .course-row { display: grid; grid-template-columns: 1.5fr 3fr 0.8fr 0.8fr 1fr auto; gap: 10px; align-items: center; padding: 8px 0; border-bottom: 1px solid #f5f5f5; }
+        .course-row input, .course-row select { padding: 8px; border: 1px solid #ddd; border-radius: 6px; width: 100%; }
+        .course-row.excluded { opacity: 0.4; text-decoration: line-through; background: #f9f9f9; }
+        
+        /* AI Section */
+        .ai-panel { background: linear-gradient(135deg, #2c3e50, #3498db); color: white; padding: 25px; border-radius: 12px; margin-top: 30px; }
+        .strategy-card { background: rgba(255,255,255,0.1); padding: 15px; margin-top: 10px; border-radius: 8px; border-left: 4px solid #f1c40f; }
+        
+        .btn { cursor: pointer; padding: 10px 20px; border: none; border-radius: 6px; font-weight: bold; transition: 0.2s; }
+        .btn-ai { background: #f1c40f; color: #2c3e50; width: 100%; font-size: 1.1rem; }
+        .btn-add { background: var(--primary); color: white; }
+        .btn-del { background: var(--danger); color: white; padding: 5px 10px; }
+        .btn-calc { background: var(--success); color: white; margin-top: 10px; }
+        .btn-warning { background: var(--warning); color: white; }
+
+        @media (max-width: 768px) {
+            .course-row { grid-template-columns: 1fr 1fr; gap: 5px; background: #f8f9fa; padding: 10px; margin-bottom: 10px; border-radius: 8px; }
+            .course-row input:first-child { grid-column: span 2; font-weight: bold; }
+            .stats-grid { grid-template-columns: repeat(2, 1fr); }
+        }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <div class="header-card">
+        <h2>🎓 IUB Transcript Planner</h2>
+        <div class="cgpa-box" id="cgpa-display">0.00</div>
+        <div class="stats-grid">
+            <div class="stat-item">Attempted: <strong id="credits-attempted">0</strong></div>
+            <div class="stat-item">Earned: <strong id="credits-earned">0</strong></div>
+            <div class="stat-item">Class: <strong id="class-standing">-</strong></div>
+            <div class="stat-item">Remaining: <strong id="remaining-credits">0</strong></div>
+        </div>
+        <button class="btn btn-calc" onclick="calculateCGPA()">Calculate CGPA</button>
+        <button class="btn btn-warning" onclick="resetTranscript()" style="margin-left: 10px;">Reset All</button>
+    </div>
+
+    <div class="upload-area" onclick="document.getElementById('file-input').click()">
+        <h3>📄 Upload Transcript PDF</h3>
+        <p>Supports IUB Format (Auto-Split Semesters)</p>
+        <div class="upload-progress" id="upload-progress"></div>
+        <input type="file" id="file-input" accept=".pdf" style="display: none" onchange="handleFile(this.files[0])">
+    </div>
+
+    <div id="transcript-container"></div>
+    
+    <div style="text-align: center; margin: 20px;">
+        <button class="btn btn-add" onclick="addSemester()">+ Add Next Semester</button>
+    </div>
+
+    <div class="ai-panel">
+        <h3>🤖 AI CGPA Strategist</h3>
+        <p>Don't know which course to retake? I can calculate the best path for you.</p>
+        <button class="btn btn-ai" onclick="generateStrategy()">Generate Improvement Strategy</button>
+        <div id="ai-output" style="margin-top: 20px;"></div>
+    </div>
+</div>
+
+<script>
+    // --- IUB Grading Scale ---
+    const gradeScale = {
+        'A': 4.0, 'A-': 3.7, 'B+': 3.3, 'B': 3.0, 'B-': 2.7,
+        'C+': 2.3, 'C': 2.0, 'C-': 1.7, 'D+': 1.3, 'D': 1.0, 
+        'F': 0.0, 'I': 0.0, 'W': 0.0, 'Z': 0.0, 'T': 0.0
+    };
+
+    let totalDegreeCredits = 130; // Default IUB total credits
+
+    // --- FIXED PDF Parsing Logic ---
+    async function handleFile(file) {
+        if (!file) return;
+        
+        document.getElementById('upload-progress').textContent = "Processing PDF...";
+        document.getElementById('transcript-container').innerHTML = "";
+        
+        try {
+            const fileReader = new FileReader();
+            
+            fileReader.onload = async function(e) {
+                try {
+                    const typedarray = new Uint8Array(e.target.result);
+                    const loadingTask = pdfjsLib.getDocument(typedarray);
+                    const pdf = await loadingTask.promise;
+                    
+                    let fullText = "";
+                    
+                    // Extract text from all pages
+                    for (let pageNum = 1; pageNum <= pdf.numPages; pageNum++) {
+                        document.getElementById('upload-progress').textContent = 
+                            `Processing page ${pageNum} of ${pdf.numPages}...`;
+                        
+                        const page = await pdf.getPage(pageNum);
+                        const textContent = await page.getTextContent();
+                        
+                        // Extract text with better formatting
+                        const pageText = textContent.items
+                            .map(item => item.str)
+                            .join(' ')
+                            .replace(/\s+/g, ' ')
+                            .trim();
+                        
+                        fullText += pageText + "\n";
+                    }
+                    
+                    document.getElementById('upload-progress').textContent = "Parsing transcript data...";
+                    parseIUBTranscript(fullText);
+                    document.getElementById('upload-progress').textContent = "✓ PDF processed successfully!";
+                    
+                } catch (error) {
+                    console.error("PDF processing error:", error);
+                    document.getElementById('upload-progress').textContent = "Error processing PDF";
+                    alert("Error processing PDF: " + error.message);
+                }
+            };
+            
+            fileReader.onerror = function() {
+                document.getElementById('upload-progress').textContent = "Error reading file";
+                alert("Error reading file");
+            };
+            
+            fileReader.readAsArrayBuffer(file);
+            
+        } catch (error) {
+            console.error("File handling error:", error);
+            alert("Error: " + error.message);
+        }
+    }
+
+    function parseIUBTranscript(text) {
+        console.log("Raw text extracted:", text.substring(0, 500) + "...");
+        
+        // Clear previous data
+        document.getElementById('transcript-container').innerHTML = '';
+        
+        // Step 1: Extract semester sections
+        // Looking for patterns like: SUMMER 1 2024, AUTUMN 2024, SPRING 2025, etc.
+        const semesterPattern = /(SPRING|SUMMER|AUTUMN|FALL)\s*(?:1|2)?\s*(\d{4})/gi;
+        
+        // Split text by semester headers
+        const sections = [];
+        let lastIndex = 0;
+        let match;
+        
+        while ((match = semesterPattern.exec(text)) !== null) {
+            if (lastIndex < match.index) {
+                // Add previous section
+                const sectionText = text.substring(lastIndex, match.index);
+                sections.push({ text: sectionText, isSemester: false });
+            }
+            
+            // Add semester header
+            const semesterName = match[0];
+            sections.push({ text: semesterName, isSemester: true });
+            lastIndex = match.index + semesterName.length;
+        }
+        
+        // Add remaining text
+        if (lastIndex < text.length) {
+            sections.push({ text: text.substring(lastIndex), isSemester: false });
+        }
+        
+        // Step 2: Process sections and extract courses
+        let currentSemester = null;
+        let currentSemesterId = null;
+        
+        for (let i = 0; i < sections.length; i++) {
+            if (sections[i].isSemester) {
+                // This is a semester header
+                const semesterName = sections[i].text;
+                
+                // Create new semester
+                currentSemesterId = addSemester(semesterName);
+                currentSemester = semesterName;
+                
+                // Look for courses in the next section(s)
+                let courseSectionText = "";
+                for (let j = i + 1; j < sections.length; j++) {
+                    if (sections[j].isSemester) break;
+                    courseSectionText += sections[j].text + " ";
+                }
+                
+                // Parse courses from this semester
+                parseCoursesFromSection(currentSemesterId, courseSectionText);
+            }
+        }
+        
+        // If no semesters found, try alternative parsing
+        if (!currentSemester) {
+            parseCoursesDirectly(text);
+        }
+        
+        calculateCGPA();
+    }
+
+    function parseCoursesFromSection(semesterId, sectionText) {
+        // This regex matches course patterns from your transcript example
+        // Format: CODE Title Grade Credit
+        const coursePatterns = [
+            // Pattern 1: ENG102 English Reading Skills B 3.00
+            /([A-Z]{2,4}\d{3}[A-Z]?)\s+([A-Za-z\s]+?)\s+([A-Z][+-]?)\s+(\d+\.\d{2})/g,
+            // Pattern 2: BUS202 Business Mathematics Z 3.00
+            /([A-Z]{2,4}\d{3}[A-Z]?)\s+([A-Za-z\s]+?)\s+([A-Z])\s+(\d+\.\d{2})/g,
+            // Pattern 3: CSE101 Programming A 3.00
+            /([A-Z]{2,4}\d{3}[A-Z]?)\s+([A-Z][+-]?)\s+(\d+\.\d{2})/g
+        ];
+        
+        let courseCount = 0;
+        
+        for (const pattern of coursePatterns) {
+            let match;
+            pattern.lastIndex = 0; // Reset regex index
+            
+            while ((match = pattern.exec(sectionText)) !== null) {
+                const code = match[1].trim();
+                let title = match[2] ? match[2].trim() : "";
+                let grade = match[3] ? match[3].trim() : "";
+                let credits = match[4] ? parseFloat(match[4]) : 3.0;
+                
+                // If pattern 3 was used, adjust values
+                if (match.length === 4 && pattern === coursePatterns[2]) {
+                    grade = match[2];
+                    credits = parseFloat(match[3]);
+                    title = ""; // No title in this pattern
+                }
+                
+                // Validate the course data
+                if (code && grade && !isNaN(credits)) {
+                    // Skip if it's just a single letter (might be caught incorrectly)
+                    if (title.length === 1 && /[A-Z]/.test(title)) {
+                        // This might actually be the grade, adjust
+                        grade = title;
+                        title = "";
+                    }
+                    
+                    addCourse(semesterId, code, grade, credits, title);
+                    courseCount++;
+                }
+            }
+        }
+        
+        // Alternative: Parse table-like structure
+        if (courseCount === 0) {
+            parseTableCourses(semesterId, sectionText);
+        }
+        
+        console.log(`Found ${courseCount} courses for semester ${semesterId}`);
+    }
+
+    function parseTableCourses(semesterId, sectionText) {
+        // Parse courses from table format
+        const lines = sectionText.split(/\n|\\n/);
+        
+        for (const line of lines) {
+            // Look for course code patterns at the beginning of line
+            const courseMatch = line.match(/^([A-Z]{2,4}\d{3}[A-Z]?)\s+(.+)/);
+            if (courseMatch) {
+                const code = courseMatch[1];
+                const rest = courseMatch[2].trim();
+                
+                // Try to extract grade and credits
+                // Common patterns: "B 3.00" or "C+ 3.00" or "Z 3.00"
+                const gradeMatch = rest.match(/([A-Z][+-]?)\s+(\d+\.\d{2})/);
+                
+                if (gradeMatch) {
+                    const grade = gradeMatch[1];
+                    const credits = parseFloat(gradeMatch[2]);
+                    const title = rest.substring(0, rest.indexOf(gradeMatch[0])).trim();
+                    
+                    addCourse(semesterId, code, grade, credits, title);
+                }
+            }
+        }
+    }
+
+    function parseCoursesDirectly(text) {
+        // Fallback: Direct parsing from entire text
+        const semesterId = addSemester("Extracted Courses");
+        
+        // Look for all course codes with grades
+        const courseRegex = /([A-Z]{2,4}\d{3}[A-Z]?)\s+([A-Za-z\s]+?)\s+([A-Z][+-]?)\s+(\d+\.\d{2})/g;
+        let match;
+        
+        while ((match = courseRegex.exec(text)) !== null) {
+            const code = match[1];
+            const title = match[2].trim();
+            const grade = match[3];
+            const credits = parseFloat(match[4]);
+            
+            addCourse(semesterId, code, grade, credits, title);
+        }
+    }
+
+    // --- UI Builders ---
+    function addSemester(name = "New Semester") {
+        const id = "sem-" + Date.now() + Math.random().toString(36).substr(2, 9);
+        const container = document.getElementById('transcript-container');
+        
+        // Check for duplicate semester names
+        const existingSemesters = Array.from(container.querySelectorAll('.semester-header input'))
+            .map(input => input.value.trim());
+        
+        if (existingSemesters.includes(name.trim())) {
+            // Append number to make unique
+            let counter = 1;
+            let newName = name;
+            while (existingSemesters.includes(newName.trim())) {
+                newName = `${name} (${counter})`;
+                counter++;
+            }
+            name = newName;
+        }
+        
+        const div = document.createElement('div');
+        div.className = 'semester-block';
+        div.id = id;
+        div.innerHTML = `
+            <div class="semester-header">
+                <input type="text" value="${name}" style="border:none; font-size:1.1rem; font-weight:bold; color:#1a5f7a; width:200px;">
+                <span>Semester GPA: <span id="gpa-${id}">0.00</span></span>
+                <button class="btn btn-del" onclick="removeSemester('${id}')">✕</button>
+            </div>
+            <div id="courses-${id}"></div>
+            <button class="btn" style="color:var(--primary); font-size:0.9rem;" onclick="addCourse('${id}')">+ Add Course</button>
+        `;
+        container.appendChild(div);
+        return id;
+    }
+
+    function addCourse(semId, code = "", grade = "B", credits = "3.00", title = "") {
+        const list = document.getElementById(`courses-${semId}`);
+        if (!list) return;
+        
+        // Check for duplicate course in this semester
+        const existingCourses = Array.from(list.querySelectorAll('.course-row input:first-child'))
+            .map(input => input.value.trim().toUpperCase());
+        
+        if (code && existingCourses.includes(code.toUpperCase())) {
+            console.log(`Skipping duplicate course: ${code}`);
+            return;
+        }
+        
+        const id = "course-" + Date.now() + Math.random().toString(36).substr(2, 9);
+        
+        const div = document.createElement('div');
+        div.className = 'course-row';
+        div.id = id;
+        
+        // Convert numeric grade to letter grade if needed
+        let gradeLetter = grade;
+        if (!isNaN(grade) && grade >= 0 && grade <= 4) {
+            if (grade >= 3.7) gradeLetter = 'A';
+            else if (grade >= 3.3) gradeLetter = 'A-';
+            else if (grade >= 3.0) gradeLetter = 'B+';
+            else if (grade >= 2.7) gradeLetter = 'B';
+            else if (grade >= 2.3) gradeLetter = 'B-';
+            else if (grade >= 2.0) gradeLetter = 'C+';
+            else if (grade >= 1.7) gradeLetter = 'C';
+            else if (grade >= 1.3) gradeLetter = 'C-';
+            else if (grade >= 1.0) gradeLetter = 'D';
+            else gradeLetter = 'F';
+        }
+        
+        div.innerHTML = `
+            <input type="text" value="${code}" placeholder="Code" oninput="calculateCGPA()">
+            <input type="text" value="${title}" placeholder="Course Title">
+            <input type="number" value="${parseFloat(credits)}" step="0.5" min="0" max="6" oninput="calculateCGPA()">
+            <select onchange="calculateCGPA()">
+                <option value="">Select Grade</option>
+                ${Object.keys(gradeScale).map(g => 
+                    `<option value="${g}" ${g === gradeLetter ? 'selected' : ''}>${g}</option>`
+                ).join('')}
+            </select>
+            <label style="font-size:0.85rem; cursor:pointer; display:flex; align-items:center;">
+                <input type="checkbox" onchange="toggleExclude('${id}')"> Exclude
+            </label>
+            <button class="btn btn-del" onclick="this.parentElement.remove(); calculateCGPA()">🗑</button>
+        `;
+        list.appendChild(div);
+        calculateCGPA();
+        return id;
+    }
+
+    function removeSemester(id) {
+        const element = document.getElementById(id);
+        if (element) {
+            element.remove();
+            calculateCGPA();
+        }
+    }
+
+    function toggleExclude(id) {
+        const row = document.getElementById(id);
+        if (row) {
+            row.classList.toggle('excluded');
+            calculateCGPA();
+        }
+    }
+
+    function resetTranscript() {
+        if (confirm("Are you sure you want to reset everything?")) {
+            document.getElementById('transcript-container').innerHTML = '';
+            document.getElementById('cgpa-display').textContent = "0.00";
+            document.getElementById('credits-attempted').textContent = "0";
+            document.getElementById('credits-earned').textContent = "0";
+            document.getElementById('class-standing').textContent = "-";
+            document.getElementById('remaining-credits').textContent = "0";
+            document.getElementById('ai-output').innerHTML = '';
+            document.getElementById('upload-progress').textContent = "";
+        }
+    }
+
+    // --- Core Calculation Logic ---
+    function calculateCGPA() {
+        let totalPoints = 0;
+        let totalCreditsAttempted = 0;
+        let totalCreditsEarned = 0;
+        let totalCreditsForGPA = 0;
+
+        const semesterBlocks = document.querySelectorAll('.semester-block');
+
+        semesterBlocks.forEach(sem => {
+            let semPoints = 0;
+            let semCredits = 0;
+            let semCreditsForGPA = 0;
+            
+            const rows = sem.querySelectorAll('.course-row:not(.excluded)');
+            rows.forEach(row => {
+                const inputs = row.querySelectorAll('input, select');
+                const credits = parseFloat(inputs[2].value) || 0;
+                const grade = inputs[3].value;
+                const gp = gradeScale[grade];
+
+                if (grade && gp !== undefined && credits > 0) {
+                    // IUB Grading Rules:
+                    // Z/I/W/T do not count towards GPA calculation
+                    // F counts as 0.0 but counts towards attempted credits
+                    
+                    if (grade === 'Z' || grade === 'I' || grade === 'W' || grade === 'T') {
+                        // These grades don't affect GPA
+                        totalCreditsAttempted += 0; // Not counted in attempted for GPA
+                    } else {
+                        // Normal grade calculation
+                        const points = gp * credits;
+                        semPoints += points;
+                        semCredits += credits;
+                        semCreditsForGPA += credits;
+                        
+                        totalPoints += points;
+                        totalCreditsAttempted += credits;
+                        totalCreditsForGPA += credits;
+                        
+                        if (gp > 0) {
+                            totalCreditsEarned += credits;
+                        }
+                    }
+                }
+            });
+
+            // Update Semester GPA
+            const semGPA = semCreditsForGPA > 0 ? (semPoints / semCreditsForGPA).toFixed(2) : "0.00";
+            const gpaSpan = sem.querySelector('span[id^="gpa-"]');
+            if (gpaSpan) {
+                gpaSpan.textContent = semGPA;
+            }
+        });
+
+        // Calculate Overall CGPA
+        const cgpa = totalCreditsForGPA > 0 ? (totalPoints / totalCreditsForGPA).toFixed(2) : "0.00";
+        
+        // Update UI
+        document.getElementById('cgpa-display').textContent = cgpa;
+        document.getElementById('credits-attempted').textContent = totalCreditsAttempted.toFixed(2);
+        document.getElementById('credits-earned').textContent = totalCreditsEarned.toFixed(2);
+        
+        // Calculate remaining credits
+        const remainingCredits = Math.max(0, totalDegreeCredits - totalCreditsEarned);
+        document.getElementById('remaining-credits').textContent = remainingCredits.toFixed(2);
+        
+        // Class Standing (IUB Standards)
+        const cgpaNum = parseFloat(cgpa);
+        let standing = "-";
+        if (cgpaNum >= 3.85) standing = "Summa Cum Laude";
+        else if (cgpaNum >= 3.70) standing = "Magna Cum Laude";
+        else if (cgpaNum >= 3.50) standing = "Cum Laude";
+        else if (cgpaNum >= 3.00) standing = "First Class";
+        else if (cgpaNum >= 2.50) standing = "Second Class";
+        else if (cgpaNum >= 2.00) standing = "Third Class";
+        else standing = "Probation Risk";
+        
+        document.getElementById('class-standing').textContent = standing;
+        
+        return { 
+            cgpa: cgpaNum, 
+            totalPoints, 
+            totalCreditsAttempted, 
+            totalCreditsEarned,
+            totalCreditsForGPA
+        };
+    }
+
+    // --- AI Strategy Logic ---
+    function generateStrategy() {
+        const currentData = calculateCGPA();
+        const currentCGPA = currentData.cgpa;
+        const output = document.getElementById('ai-output');
+        
+        if (currentData.totalCreditsAttempted === 0) {
+            output.innerHTML = `<div class="strategy-card">
+                <h4>📊 No Data Available</h4>
+                <p>Please upload your transcript or add courses first.</p>
+            </div>`;
+            return;
+        }
+        
+        // Collect courses with low grades
+        let weakCourses = [];
+        document.querySelectorAll('.course-row:not(.excluded)').forEach(row => {
+            const inputs = row.querySelectorAll('input, select');
+            const code = inputs[0].value;
+            const title = inputs[1].value;
+            const credits = parseFloat(inputs[2].value) || 0;
+            const grade = inputs[3].value;
+            const gp = gradeScale[grade];
+            
+            if (grade && gp < 2.5 && grade !== 'Z' && grade !== 'W' && grade !== 'I' && credits > 0) {
+                weakCourses.push({ code, title, credits, grade, gp, row });
+            }
+        });
+        
+        let html = "";
+        
+        if (weakCourses.length === 0) {
+            html = `<div class="strategy-card" style="border-color:#2ecc71">
+                <h4>✅ Strong Academic Performance</h4>
+                <p>All your grades are B- or above! To further improve:</p>
+                <ul>
+                    <li>Maintain consistency in upcoming semesters</li>
+                    <li>Aim for A grades in your remaining ${currentData.totalCreditsEarned < totalDegreeCredits ? totalDegreeCredits - currentData.totalCreditsEarned : 0} credits</li>
+                    <li>Consider challenging yourself with advanced courses</li>
+                </ul>
+            </div>`;
+        } else {
+            html = `<h4>📈 Improvement Strategy</h4>
+                    <p>Found <strong>${weakCourses.length}</strong> courses with grades below B-:</p>`;
+            
+            // Sort by impact (lowest grade × highest credits first)
+            weakCourses.sort((a, b) => (a.gp * a.credits) - (b.gp * b.credits));
+            
+            weakCourses.forEach(course => {
+                const pointsLost = course.gp * course.credits;
+                const pointsIfA = 4.0 * course.credits;
+                const pointsIfB = 3.0 * course.credits;
+                
+                const newTotalIfA = currentData.totalPoints - pointsLost + pointsIfA;
+                const newTotalIfB = currentData.totalPoints - pointsLost + pointsIfB;
+                
+                const newGPAifA = (newTotalIfA / currentData.totalCreditsForGPA).toFixed(2);
+                const newGPAifB = (newTotalIfB / currentData.totalCreditsForGPA).toFixed(2);
+                
+                const improvementA = (newGPAifA - currentCGPA).toFixed(2);
+                const improvementB = (newGPAifB - currentCGPA).toFixed(2);
+                
+                html += `
+                <div class="strategy-card">
+                    <div style="display: flex; justify-content: space-between; align-items: center;">
+                        <strong>${course.code}</strong>
+                        <span style="color: #e74c3c;">Current: ${course.grade} (${(course.gp * course.credits).toFixed(1)} points)</span>
+                    </div>
+                    <p><small>${course.title || 'No title'}</small></p>
+                    <div style="margin-top: 8px;">
+                        <div>📊 Impact of retaking:</div>
+                        <div>• Get <strong>B (3.0)</strong>: CGPA → ${newGPAifB} <span style="color: #2ecc71;">(+${improvementB})</span></div>
+                        <div>• Get <strong>A (4.0)</strong>: CGPA → ${newGPAifA} <span style="color: #2ecc71;">(+${improvementA})</span></div>
+                    </div>
+                    <div style="margin-top: 10px; font-size: 0.85em; color: #ddd;">
+                        <i>Tip: Check "Exclude" for this course and add it in a new semester to plan retaking.</i>
+                    </div>
+                </div>`;
+            });
+        }
+        
+        // Add overall targets
+        html += `<div class="strategy-card" style="border-color: #3498db; margin-top: 20px;">
+            <h4>🎯 GPA Targets</h4>
+            <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin-top: 10px;">
+                ${[3.0, 3.3, 3.5, 3.7, 3.85, 4.0].map(target => {
+                    if (currentCGPA < target) {
+                        const pointsNeeded = (target - currentCGPA) * currentData.totalCreditsForGPA;
+                        const creditsNeeded = Math.ceil(pointsNeeded / (4.0 - 2.5)); // Assuming improvement from 2.5 to 4.0
+                        return `<div style="text-align: center; padding: 8px; background: rgba(255,255,255,0.1); border-radius: 6px;">
+                            <div><strong>${target.toFixed(2)}</strong></div>
+                            <div style="font-size: 0.8em;">${creditsNeeded} cr of A's</div>
+                        </div>`;
+                    }
+                    return `<div style="text-align: center; padding: 8px; background: rgba(46, 204, 113, 0.3); border-radius: 6px;">
+                        <div><strong>${target.toFixed(2)} ✓</strong></div>
+                        <div style="font-size: 0.8em;">Achieved</div>
+                    </div>`;
+                }).join('')}
+            </div>
+        </div>`;
+        
+        output.innerHTML = html;
+    }
+
+    // Initialize with sample data
+    window.onload = function() {
+        addSemester("Sample Semester");
+        addCourse(document.querySelector('.semester-block').id, "CSE101", "A", "3.00", "Programming Fundamentals");
+        addCourse(document.querySelector('.semester-block').id, "ENG101", "B", "3.00", "English Composition");
+        addCourse(document.querySelector('.semester-block').id, "MAT101", "C+", "3.00", "Calculus I");
+        calculateCGPA();
+    }
+</script>
+
+</body>
+</html>
